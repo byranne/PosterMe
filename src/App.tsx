@@ -4,6 +4,13 @@ import ClapperBoard from "./components/ClapperBoard";
 import Webcam from "react-webcam";
 import { imageStorageService } from "./services/imageStorage";
 
+interface Poster {
+  id: number;
+  title: string;
+  image_url: string;
+  similarity: number;
+}
+
 function App() {
   const [showCurtain, setShowCurtain] = useState(true);
   const [webcamError, setWebcamError] = useState<string | null>(null);
@@ -17,6 +24,9 @@ function App() {
   const [showTitle, setShowTitle] = useState(true);
   const [showWebcam, setShowWebcam] = useState(true);
   const [currentPosterIndex, setCurrentPosterIndex] = useState(0);
+  const [posterResults, setPosterResults] = useState<any[]>([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [posters, setPosters] = useState<Poster[]>([]);
 
   // Check camera permissions when component mounts
   useEffect(() => {
@@ -36,16 +46,45 @@ function App() {
     checkPermissions();
   }, []);
 
+  const processImage = async (imageData: string) => {
+    try {
+      setIsProcessing(true);
+      const response = await fetch('http://127.0.0.1:5000/process-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        credentials: 'include',
+        mode: 'cors',
+        body: JSON.stringify({ image: imageData }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.success) {
+        setPosterResults(data.similar_posters);
+      } else {
+        console.error('Error processing image:', data.error);
+      }
+    } catch (error) {
+      console.error('Error sending image to backend:', error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleButtonClick = async () => {
-    if (isFreezing) return; // Prevent multiple clicks while processing
+    if (isFreezing) return;
     
     setIsFreezing(true);
     setButtonPressed(true);
     
-    // Start countdown from 3
     setCountdown(3);
     
-    // Countdown sequence
     const countdownInterval = setInterval(() => {
       setCountdown(prev => {
         if (prev === null || prev <= 1) {
@@ -56,44 +95,37 @@ function App() {
       });
     }, 1000);
     
-    // Add delay before closing curtain
     setTimeout(async () => {
       if (showCurtain) {
         setShowCurtain(false);
       }
       
-      // Take the photo immediately after curtain closes
       setTimeout(async () => {
         if (!webcamRef.current) return;
         
         const imageSrc = webcamRef.current.getScreenshot();
         if (imageSrc) {
           setPhoto(imageSrc);
-          // Store the image using the imageStorageService
-          const result = await imageStorageService.storeImage(imageSrc);
-          if (!result.success) {
-            console.error('Failed to store image:', result.error);
-          }
+          // Process the image with the backend
+          await processImage(imageSrc);
           // Show clapper board after photo is taken
           setShowClapper(true);
-          // Hide clapper board and close curtain after a delay
           setTimeout(() => {
             setShowClapper(false);
             setShowCurtain(true);
-            setShowTitle(false); // Hide title after first photo
-            setShowWebcam(false); // Hide webcam after second curtain opens
-          }, 2000); // Show clapper board for 2 seconds
+            setShowTitle(false);
+            setShowWebcam(false);
+          }, 2000);
         } else {
           setWebcamError("Failed to capture photo. Please try again.");
         }
         
-        // Reset button state after a short delay
         setTimeout(() => {
           setButtonPressed(false);
           setIsFreezing(false);
         }, 150);
       }, 50);
-    }, 3000); // 3 second delay before curtain closes
+    }, 3000);
   };
 
   const handlePrevPoster = () => {
@@ -199,46 +231,62 @@ function App() {
 
             {/* Poster Carousel */}
             <div className="flex justify-center items-center gap-4">
-              {[...Array(5)].map((_, index) => {
-                // Calculate the position relative to the current poster
-                let position = index - currentPosterIndex;
-                // Normalize position to be between -2 and 2
-                if (position > 2) position -= 5;
-                if (position < -2) position += 5;
+              {isProcessing ? (
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-gray-900 mx-auto"></div>
+                  <p className="mt-4 text-gray-600">Processing image...</p>
+                </div>
+              ) : posterResults.length > 0 ? (
+                posterResults.map((poster, index) => {
+                  let position = index - currentPosterIndex;
+                  if (position > 2) position -= 5;
+                  if (position < -2) position += 5;
 
-                let scale = 1;
-                let opacity = 1;
-                let zIndex = 0;
+                  let scale = 1;
+                  let opacity = 1;
+                  let zIndex = 0;
 
-                if (position === 0) {
-                  scale = 1.1;
-                  zIndex = 2;
-                } else if (position === 1 || position === -1) {
-                  scale = 0.9;
-                  opacity = 0.7;
-                  zIndex = 1;
-                } else {
-                  scale = 0.8;
-                  opacity = 0.5;
-                }
+                  if (position === 0) {
+                    scale = 1.1;
+                    zIndex = 2;
+                  } else if (position === 1 || position === -1) {
+                    scale = 0.9;
+                    opacity = 0.7;
+                    zIndex = 1;
+                  } else {
+                    scale = 0.8;
+                    opacity = 0.5;
+                  }
 
-                return (
-                  <div
-                    key={index}
-                    className={`absolute transition-all duration-300 ease-in-out`}
-                    style={{
-                      transform: `translateX(${position * 100}%) scale(${scale})`,
-                      opacity: opacity,
-                      zIndex: zIndex,
-                      width: '20%',
-                    }}
-                  >
-                    <div className="aspect-[2/3] rounded-lg overflow-hidden bg-gray-300 flex items-center justify-center">
-                      <span className="text-gray-500 text-lg">Poster {index + 1}</span>
+                  return (
+                    <div
+                      key={index}
+                      className={`absolute transition-all duration-300 ease-in-out`}
+                      style={{
+                        transform: `translateX(${position * 100}%) scale(${scale})`,
+                        opacity: opacity,
+                        zIndex: zIndex,
+                        width: '20%',
+                      }}
+                    >
+                      <div className="aspect-[2/3] rounded-lg overflow-hidden bg-gray-300">
+                        <img 
+                          src={poster.poster_url} 
+                          alt={poster.title}
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white p-2">
+                          <p className="text-sm truncate">{poster.title}</p>
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                <div className="text-center">
+                  <p className="text-gray-600">No posters found</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
